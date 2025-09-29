@@ -101,6 +101,7 @@
     .data-ops {
         display: flex;
         gap: 4px;
+        flex-wrap: wrap; /* Allow buttons to wrap on smaller screens */
     }
     .data-ops button {
       background-color: var(--bg-white);
@@ -466,25 +467,29 @@
     .popover-btn[data-action="save"],
     .popover-btn[data-action="update"],
     .popover-btn[data-action="select-template"],
-    .popover-btn[data-action="open-link"] {
+    .popover-btn[data-action="open-link"],
+    .popover-btn[data-action="load-from-pasted-text"] {
         background-color: var(--btn-blue-bg);
         border-color: #b8d6f5;
     }
     .popover-btn[data-action="save"]:hover:not(:disabled),
     .popover-btn[data-action="update"]:hover:not(:disabled),
     .popover-btn[data-action="select-template"]:hover:not(:disabled),
-    .popover-btn[data-action="open-link"]:hover:not(:disabled) {
+    .popover-btn[data-action="open-link"]:hover:not(:disabled),
+    .popover-btn[data-action="load-from-pasted-text"]:hover:not(:disabled) {
         background-color: var(--btn-blue-hover-bg);
     }
 
     /* 貼付 (paste) / 複写 (duplicate) - Light Yellow */
     .popover-btn[data-action="paste"],
-    .popover-btn[data-action="duplicate"] {
+    .popover-btn[data-action="duplicate"],
+    .popover-btn[data-action="paste-from-clipboard"] {
         background-color: var(--btn-yellow-bg);
         border-color: #f0e0a4;
     }
     .popover-btn[data-action="paste"]:hover:not(:disabled),
-    .popover-btn[data-action="duplicate"]:hover:not(:disabled) {
+    .popover-btn[data-action="duplicate"]:hover:not(:disabled),
+    .popover-btn[data-action="paste-from-clipboard"]:hover:not(:disabled) {
         background-color: var(--btn-yellow-hover-bg);
     }
     
@@ -497,12 +502,14 @@
         background-color: var(--btn-brown-hover-bg);
     }
     
-    /* リンク (edit-link) - Gray */
-    .popover-btn[data-action="edit-link"] {
+    /* リンク (edit-link) / キャンセル - Gray */
+    .popover-btn[data-action="edit-link"],
+    .popover-btn[data-action="cancel-paste"] {
         background-color: var(--btn-gray-bg);
         border-color: #cccccc;
     }
-    .popover-btn[data-action="edit-link"]:hover:not(:disabled) {
+    .popover-btn[data-action="edit-link"]:hover:not(:disabled),
+    .popover-btn[data-action="cancel-paste"]:hover:not(:disabled) {
         background-color: var(--btn-gray-hover-bg);
     }
 
@@ -696,6 +703,61 @@
         gap: 6px;
     }
 
+    /* Paste Data Modal */
+    .modal-backdrop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+        z-index: 1100;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+    .modal-content {
+        background-color: var(--bg-white);
+        padding: 24px;
+        border-radius: 8px;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        width: 90%;
+        max-width: 500px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+    }
+    .modal-content h3 {
+        margin: 0;
+        font-size: 1.2em;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    .modal-content p {
+        margin: 0;
+        font-size: 0.9em;
+        color: var(--text-secondary);
+        line-height: 1.5;
+    }
+    .modal-content textarea {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        padding: 10px;
+        font-size: 0.9em;
+        font-family: monospace;
+        resize: vertical;
+        min-height: 150px;
+    }
+    .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 12px;
+        margin-top: 8px;
+    }
+
+
     /* スクロール用余白 */
     .scroll-buffer {
       display: none;
@@ -736,6 +798,9 @@
         .id-control input {
             flex-grow: 1;
             min-width: 0;
+        }
+        .data-ops {
+            gap: 4px; /* Adjust gap for smaller screens */
         }
         .calendar-board {
             padding: 8px 4px;
@@ -800,7 +865,22 @@
   <div id="popover" style="display: none;"></div>
   <div id="decoration-popover" style="display: none;"></div>
   <div id="template-popover-container"></div>
-  <input type="file" id="file-importer" accept=".json" style="display: none;">
+
+  <div id="paste-modal-backdrop" class="modal-backdrop" style="display: none;">
+    <div class="modal-content">
+      <h3>テキストデータを貼り付け</h3>
+      <p>
+        別のタブで開いたテキストファイル(.txt)の内容をコピーし、下のボックス内に貼り付けてください。
+        貼り付けると、データが自動的に読み込まれます。
+      </p>
+      <textarea id="paste-data-textarea" placeholder="ここにJSON形式のテキストを貼り付け..."></textarea>
+      <div class="modal-actions">
+        <button class="popover-btn" data-action="cancel-paste">キャンセル</button>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="file-importer" accept=".json,.txt" style="display: none;">
 
   <script>
     document.addEventListener('DOMContentLoaded', () => {
@@ -840,6 +920,8 @@
             decorationPopover: document.getElementById('decoration-popover'),
             templatePopoverContainer: document.getElementById('template-popover-container'),
             fileImporter: document.getElementById('file-importer'),
+            pasteModalBackdrop: document.getElementById('paste-modal-backdrop'),
+            pasteDataTextarea: document.getElementById('paste-data-textarea'),
         };
 
         // =================================================================================
@@ -1115,6 +1197,7 @@
                            <button data-action="new">新規</button>
                            <button data-action="save-file">保存</button>
                            <button data-action="import-file">読込</button>
+                           <button data-action="import-from-text">貼付読込</button>
                         </div>
                       </div>
                       <div class="id-control"><label for="calendar-id">ID:</label><input type="text" id="calendar-id" placeholder="スケジュール名を入力"></div>
@@ -1400,10 +1483,12 @@
             
             if (actionTarget) {
                 if (actionTarget.dataset.action === 'close-template-backdrop' && target !== actionTarget) return;
+                if (actionTarget.closest('.modal-content') && !['cancel-paste'].includes(actionTarget.dataset.action)) return;
 
                 const action = actionTarget.dataset.action;
                 const actionMap = {
                     'new': handleNewCalendar, 'save-file': handleSaveFile, 'import-file': handleImportFile,
+                    'import-from-text': handleImportFromText, 'cancel-paste': handleCancelPaste,
                     'toggle-datepicker': handleToggleDatePicker, 'prev-year': handlePrevYear, 'next-year': handleNextYear,
                     'go-today': handleGoToday, 'select-month': () => handleSelectMonth(actionTarget),
                     'close-popover': hidePopover, 'open-link': () => handleOpenLink(actionTarget),
@@ -1435,7 +1520,7 @@
                 return;
             }
 
-            if (target.closest('#popover, #decoration-popover, .date-picker-container, .template-popover-modal')) return;
+            if (target.closest('#popover, #decoration-popover, .date-picker-container, .template-popover-modal, .modal-content')) return;
 
             const clickedCell = target.closest('.date-cell');
             if (clickedCell && clickedCell.classList.contains('other-month')) {
@@ -1623,6 +1708,54 @@
             reader.readAsText(file);
         };
 
+        const handleImportFromText = () => {
+            DOM.pasteModalBackdrop.style.display = 'flex';
+            DOM.pasteDataTextarea.value = '';
+            setTimeout(() => DOM.pasteDataTextarea.focus(), 50);
+        };
+
+        const handleCancelPaste = () => {
+            DOM.pasteModalBackdrop.style.display = 'none';
+        };
+
+        const loadFromPastedText = (textData) => {
+            if (!textData) {
+                alert('テキストが入力されていません。');
+                return;
+            }
+            
+            try {
+                const data = JSON.parse(textData);
+                const hasLabels = data && Array.isArray(data.labels);
+                const hasTemplates = data && Array.isArray(data.templates);
+                const isLegacyArray = Array.isArray(data);
+
+                if (!hasLabels && !hasTemplates && !isLegacyArray) {
+                    throw new Error('無効なデータ形式です。labelsまたはtemplatesプロパティが見つかりません。');
+                }
+
+                state.labels = hasLabels ? data.labels : (isLegacyArray ? data : []);
+                state.templates = hasTemplates ? data.templates : [];
+                state.currentId = ''; 
+                
+                saveData(); 
+                render();
+                handleCancelPaste(); // Close modal
+                alert('データを読み込みました。');
+            } catch (error) {
+                alert(`エラー：データの読み込みに失敗しました。\nJSON形式が正しいか確認してください。\n${error.message}`);
+                // 読み込みに失敗してもテキストエリアは閉じないでおく
+            }
+        };
+        
+        const handlePastedData = (event) => {
+            const pastedText = (event.clipboardData || window.clipboardData).getData('text');
+            // 少し待ってから実行することで、ブラウザのUI更新と競合するのを防ぐ
+            setTimeout(() => {
+                loadFromPastedText(pastedText);
+            }, 50);
+        };
+
         // =================================================================================
         // Initialization
         // =================================================================================
@@ -1638,6 +1771,7 @@
             document.addEventListener('touchend', handlePointerUp);
             DOM.root.addEventListener('wheel', handleCalendarWheel, { passive: false });
             DOM.fileImporter.addEventListener('change', handleFileImport);
+            DOM.pasteDataTextarea.addEventListener('paste', handlePastedData);
             render();
         };
 
