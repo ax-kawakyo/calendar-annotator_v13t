@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -91,12 +92,17 @@
         color: #555;
         white-space: nowrap;
     }
-    .id-control input {
+    .id-control input, .id-control select {
         border: 1px solid #ccc;
         border-radius: 6px;
         padding: 8px 12px;
         font-size: 0.9em;
         width: 100%;
+    }
+    .id-control select {
+      flex-grow: 0;
+      width: auto;
+      max-width: 200px;
     }
     .data-ops {
         display: flex;
@@ -542,14 +548,16 @@
 
     /* 削除 (delete/delete-template) - White bg, black border, red text */
     .popover-btn[data-action="delete"],
-    .popover-btn[data-action="delete-template"] {
+    .popover-btn[data-action="delete-template"],
+    .data-ops button[data-action="delete-profile"] { /* Profile delete button */
         background-color: #ffffff;
         color: var(--danger-color);
         border: 1px solid #333;
         font-weight: 500;
     }
     .popover-btn[data-action="delete"]:hover:not(:disabled),
-    .popover-btn[data-action="delete-template"]:hover:not(:disabled) {
+    .popover-btn[data-action="delete-template"]:hover:not(:disabled),
+    .data-ops button[data-action="delete-profile"]:hover:not(:disabled) {
         background-color: var(--danger-color);
         color: white;
         border-color: var(--danger-color);
@@ -794,13 +802,20 @@
         }
         .id-control {
             width: 100%;
+            flex-wrap: wrap;
         }
+        .id-control label { display: none; } /* Hide label on mobile */
         .id-control input {
             flex-grow: 1;
             min-width: 0;
         }
+        .id-control select {
+            width: 100%;
+            max-width: 100%;
+        }
         .data-ops {
             gap: 4px; /* Adjust gap for smaller screens */
+            justify-content: center;
         }
         .calendar-board {
             padding: 8px 4px;
@@ -889,7 +904,7 @@
         // Constants, State, and DOM Cache
         // =================================================================================
 
-        const LOCAL_STORAGE_KEY = 'calendar-annotator-data';
+        const LOCAL_STORAGE_KEY = 'calendar-annotator-profiles';
         const DEFAULT_STYLE = {
             color: '#333333',
             backgroundColor: '#fffbe6',
@@ -900,9 +915,8 @@
 
         const state = {
             currentDate: new Date(),
-            labels: [],
-            templates: [],
-            currentId: '',
+            profiles: {}, // { profileId: { name, labels, templates }, ... }
+            activeProfileId: null,
             activeLabelInfo: null,
             clipboard: null,
             dragInfo: null,
@@ -913,6 +927,9 @@
             isWheeling: false,
             longPressTimer: null,
         };
+        
+        // Helper to get active profile data
+        const getActiveProfile = () => state.profiles[state.activeProfileId] || { name: '', labels: [], templates: [] };
 
         const DOM = {
             root: document.getElementById('root'),
@@ -979,9 +996,7 @@
             moveCursorToEndOfLabel(labelEl);
             showPopover(labelEl);
 
-            // モバイルでキーボードが表示されることを想定し、要素が見える位置にスクロール
             if (window.innerWidth <= 800) {
-                // 少し待ってからスクロールしないと、UIの描画やキーボードの出現と競合することがある
                 setTimeout(() => {
                     labelEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }, 100); 
@@ -989,13 +1004,16 @@
         };
 
         // =================================================================================
-        // Data Persistence
+        // Data Persistence & Profile Management
         // =================================================================================
 
         const saveData = () => {
             try {
-                const data = { labels: state.labels, templates: state.templates, currentId: state.currentId };
-                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
+                const dataToSave = {
+                    profiles: state.profiles,
+                    activeProfileId: state.activeProfileId,
+                };
+                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
             } catch (e) {
                 console.error("Failed to save data:", e);
             }
@@ -1006,14 +1024,25 @@
                 const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
                 if (savedData) {
                     const parsed = JSON.parse(savedData);
-                    state.labels = parsed.labels || [];
-                    state.templates = parsed.templates || [];
-                    state.currentId = parsed.currentId || '';
+                    state.profiles = parsed.profiles || {};
+                    state.activeProfileId = parsed.activeProfileId || null;
                 }
+                
+                if (Object.keys(state.profiles).length === 0 || !state.profiles[state.activeProfileId]) {
+                    handleNewProfile(false); // Create initial profile without confirmation
+                }
+
             } catch (e) {
                 console.error("Failed to load data:", e);
-                Object.assign(state, { labels: [], templates: [], currentId: '' });
+                handleNewProfile(false);
             }
+        };
+        
+        const createNewProfile = (name, labels = [], templates = []) => {
+            const newId = `profile_${Date.now()}`;
+            state.profiles[newId] = { name, labels, templates };
+            state.activeProfileId = newId;
+            return newId;
         };
 
         // =================================================================================
@@ -1022,6 +1051,8 @@
 
         const saveOrDiscardActiveLabel = () => {
              if (!state.activeLabelInfo) return;
+            const profile = getActiveProfile();
+            if (!profile) return;
 
             const activeLabelEl = document.querySelector('.label.editing');
             if (activeLabelEl) {
@@ -1030,16 +1061,15 @@
 
                 if (type === 'new') {
                     if (newText) {
-                        state.labels.push({ id: Date.now(), date, text: newText, top, left, style, link });
-                        saveData();
+                        profile.labels.push({ id: Date.now(), date, text: newText, top, left, style, link });
                     }
                 } else if (type === 'existing') {
-                    const label = state.labels.find(l => l.id === id);
+                    const label = profile.labels.find(l => l.id === id);
                     if (label) {
                         Object.assign(label, { text: newText, style });
-                        saveData();
                     }
                 }
+                saveData();
             }
             state.activeLabelInfo = null;
         };
@@ -1138,8 +1168,10 @@
 
         const render = () => {
             DOM.root.innerHTML = createAppHtml();
-            const idInput = document.getElementById('calendar-id');
-            if (idInput) idInput.value = state.currentId;
+            const profileNameInput = document.getElementById('profile-name');
+            if (profileNameInput) profileNameInput.value = getActiveProfile().name;
+            const profileSelector = document.getElementById('profile-selector');
+            if (profileSelector) profileSelector.value = state.activeProfileId;
             renderTemplatePopover();
         };
         
@@ -1156,7 +1188,7 @@
                    <button class="popover-btn" data-action="edit-link">リンク設定</button>
                    <button class="popover-btn" data-action="decorate">装飾</button>`;
             } else {
-                const label = state.labels.find(l => l.id === state.activeLabelInfo.id);
+                const label = getActiveProfile().labels.find(l => l.id === state.activeLabelInfo.id);
                 const link = label ? (label.link || '') : '';
                 const openLinkButton = link
                     ? `<button class="popover-btn" data-action="open-link" data-link="${link}">リンクを開く</button>`
@@ -1182,6 +1214,10 @@
 
         const createAppHtml = () => {
             const { year, month } = { year: state.currentDate.getFullYear(), month: state.currentDate.getMonth() };
+            const profileOptions = Object.keys(state.profiles).map(id => 
+                `<option value="${id}" ${id === state.activeProfileId ? 'selected' : ''}>${state.profiles[id].name || '無題のスケジュール'}</option>`
+            ).join('');
+
             return `
                 <div class="app-container">
                   <header class="header">
@@ -1194,13 +1230,19 @@
                           ${state.isDatePickerVisible ? createDatePickerPopoverHtml() : ''}
                         </div>
                         <div class="data-ops">
-                           <button data-action="new">新規</button>
-                           <button data-action="save-file">保存</button>
+                           <button data-action="new-profile">新規</button>
+                           <button data-action="export-file">エクスポート</button>
                            <button data-action="import-file">読込</button>
                            <button data-action="import-from-text">貼付読込</button>
+                           <button data-action="delete-profile">削除</button>
                         </div>
                       </div>
-                      <div class="id-control"><label for="calendar-id">ID:</label><input type="text" id="calendar-id" placeholder="スケジュール名を入力"></div>
+                      <div class="id-control">
+                        <label for="profile-selector">プロファイル:</label>
+                        <select id="profile-selector" data-action="change-profile">${profileOptions}</select>
+                        <label for="profile-name">名前:</label>
+                        <input type="text" id="profile-name" placeholder="スケジュール名を入力">
+                      </div>
                     </div>
                   </header>
                   <main class="calendar-board" id="calendar-board">${createCalendarGridHtml()}</main>
@@ -1255,7 +1297,7 @@
             const cellCls = `date-cell ${isOtherMonth ? 'other-month' : ''}`;
             const numCls = `date-number ${isToday ? 'today' : ''} ${!isToday && isSunday ? 'sunday' : ''} ${!isToday && isSaturday ? 'saturday' : ''}`;
             
-            const labelsHtml = state.labels.filter(l => l.date === dateStr).map(label => createLabelHtml(label)).join('');
+            const labelsHtml = getActiveProfile().labels.filter(l => l.date === dateStr).map(label => createLabelHtml(label)).join('');
             const newLabelHtml = (state.activeLabelInfo?.type === 'new' && state.activeLabelInfo.date === dateStr)
                 ? createLabelHtml({ ...state.activeLabelInfo, id: 'temp-new-label' }, true)
                 : '';
@@ -1279,8 +1321,9 @@
                 DOM.templatePopoverContainer.innerHTML = '';
                 return;
             }
-            const listContent = state.templates.length > 0
-                ? state.templates.map(t => {
+            const templates = getActiveProfile().templates;
+            const listContent = templates.length > 0
+                ? templates.map(t => {
                     const linkIcon = createLinkIconHtml(t.link);
                     return `<li class="template-list-item ${t.id === state.selectedTemplateId ? 'selected' : ''}" data-action="select-template-item" data-id="${t.id}" style="${getLabelStyle(t.style)}">${t.text}${linkIcon}</li>`;
                   }).join('')
@@ -1300,27 +1343,45 @@
         };
 
         // =================================================================================
-        // Action Implementations (Refactored from handleAction)
+        // Action Implementations
         // =================================================================================
 
-        const handleNewCalendar = () => {
-            if (state.labels.length > 0 && !confirm('現在のラベルをすべてクリアしますか？')) return;
-            Object.assign(state, { labels: [], templates: [], currentId: '' });
+        const handleNewProfile = (confirmFirst = true) => {
+            if (confirmFirst && !confirm('新しい空のスケジュールを作成しますか？現在の作業は保存されます。')) return;
+            const profileCount = Object.keys(state.profiles).length;
+            createNewProfile(`無題のスケジュール ${profileCount + 1}`);
             saveData();
             render();
         };
 
-        const handleSaveFile = () => {
-            state.currentId = document.getElementById('calendar-id').value.trim();
-            if (!state.currentId) {
-                alert('IDを入力してください。');
+        const handleDeleteProfile = () => {
+            const profileIds = Object.keys(state.profiles);
+            if (profileIds.length <= 1) {
+                alert('最後のプロファイルは削除できません。');
                 return;
             }
-            const dataStr = JSON.stringify({ labels: state.labels, templates: state.templates }, null, 2);
+            const activeProfileName = getActiveProfile().name;
+            if (confirm(`「${activeProfileName}」を完全に削除しますか？この操作は元に戻せません。`)) {
+                delete state.profiles[state.activeProfileId];
+                state.activeProfileId = Object.keys(state.profiles)[0]; // Switch to the first available
+                saveData();
+                render();
+            }
+        };
+
+        const handleExportFile = () => {
+            const profile = getActiveProfile();
+            const profileName = profile.name || '無題のスケジュール';
+            if (!profileName) {
+                alert('プロファイル名を入力してください。');
+                return;
+            }
+            const dataToExport = { labels: profile.labels, templates: profile.templates };
+            const dataStr = JSON.stringify(dataToExport, null, 2);
             const blob = new Blob([dataStr], { type: "application/json" });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `${state.currentId}.json`;
+            a.download = `${profileName}.json`;
             a.click();
             URL.revokeObjectURL(a.href);
         };
@@ -1344,7 +1405,8 @@
 
         const handleDeleteLabel = () => {
             if (state.activeLabelInfo?.type === 'existing') {
-                state.labels = state.labels.filter(l => l.id !== state.activeLabelInfo.id);
+                const profile = getActiveProfile();
+                profile.labels = profile.labels.filter(l => l.id !== state.activeLabelInfo.id);
                 saveData();
             }
             hidePopover();
@@ -1352,7 +1414,7 @@
 
         const handleDuplicateLabel = () => {
             if (state.activeLabelInfo?.type === 'existing') {
-                const label = state.labels.find(l => l.id === state.activeLabelInfo.id);
+                const label = getActiveProfile().labels.find(l => l.id === state.activeLabelInfo.id);
                 if (label) state.clipboard = { text: label.text, style: { ...label.style }, link: label.link };
             }
         };
@@ -1371,9 +1433,10 @@
         const handleSaveTemplate = () => {
             const activeLabelEl = document.querySelector('.label.editing');
             if (state.activeLabelInfo?.type === 'existing' && activeLabelEl) {
-                const label = state.labels.find(l => l.id === state.activeLabelInfo.id);
+                const profile = getActiveProfile();
+                const label = profile.labels.find(l => l.id === state.activeLabelInfo.id);
                 if (label) {
-                    state.templates.push({ id: Date.now(), text: activeLabelEl.innerText.trim(), style: { ...state.activeLabelInfo.style }, link: label.link });
+                    profile.templates.push({ id: Date.now(), text: activeLabelEl.innerText.trim(), style: { ...state.activeLabelInfo.style }, link: label.link });
                     saveData();
                     alert('テンプレートとして保存しました。');
                 }
@@ -1384,6 +1447,7 @@
         
         const handleEditLink = () => {
             if (!state.activeLabelInfo) return;
+            const profile = getActiveProfile();
 
             const activeLabelEl = document.querySelector('.label.editing');
             if (activeLabelEl) {
@@ -1392,7 +1456,7 @@
 
             let currentLink = '';
             if (state.activeLabelInfo.type === 'existing') {
-                const label = state.labels.find(l => l.id === state.activeLabelInfo.id);
+                const label = profile.labels.find(l => l.id === state.activeLabelInfo.id);
                 currentLink = label?.link || '';
             } else { // 'new'
                 currentLink = state.activeLabelInfo.link || '';
@@ -1402,7 +1466,7 @@
 
             const trimmedLink = newLink.trim();
             if (state.activeLabelInfo.type === 'existing') {
-                const label = state.labels.find(l => l.id === state.activeLabelInfo.id);
+                const label = profile.labels.find(l => l.id === state.activeLabelInfo.id);
                 if (label) label.link = trimmedLink;
             } else { // 'new'
                 state.activeLabelInfo.link = trimmedLink;
@@ -1422,7 +1486,7 @@
 
         const handleApplyTemplate = () => {
             if (state.activeLabelInfo && state.selectedTemplateId) {
-                const template = state.templates.find(t => t.id === state.selectedTemplateId);
+                const template = getActiveProfile().templates.find(t => t.id === state.selectedTemplateId);
                 if (template) Object.assign(state.activeLabelInfo, { text: template.text, style: { ...template.style }, link: template.link });
             }
             state.isTemplatePopoverVisible = false;
@@ -1435,7 +1499,8 @@
 
         const handleDeleteTemplate = () => {
             if (state.selectedTemplateId) {
-                state.templates = state.templates.filter(t => t.id !== state.selectedTemplateId);
+                const profile = getActiveProfile();
+                profile.templates = profile.templates.filter(t => t.id !== state.selectedTemplateId);
                 state.selectedTemplateId = null;
                 saveData();
                 renderTemplatePopover();
@@ -1453,13 +1518,9 @@
             const min = 8;
             const max = 24;
 
-            if (direction === 'decrease' && size > min) {
-                size--;
-            } else if (direction === 'increase' && size < max) {
-                size++;
-            } else {
-                return; // No change
-            }
+            if (direction === 'decrease' && size > min) size--;
+            else if (direction === 'increase' && size < max) size++;
+            else return; 
 
             state.activeLabelInfo.style.fontSize = String(size);
             
@@ -1475,7 +1536,6 @@
         // =================================================================================
         
         const handleGlobalClick = (e) => {
-            // ドラッグ操作によるクリックは無視
             if (state.dragInfo?.hasMoved) return;
 
             const target = e.target;
@@ -1487,8 +1547,8 @@
 
                 const action = actionTarget.dataset.action;
                 const actionMap = {
-                    'new': handleNewCalendar, 'save-file': handleSaveFile, 'import-file': handleImportFile,
-                    'import-from-text': handleImportFromText, 'cancel-paste': handleCancelPaste,
+                    'new-profile': handleNewProfile, 'delete-profile': handleDeleteProfile, 'export-file': handleExportFile, 
+                    'import-file': handleImportFile, 'import-from-text': handleImportFromText, 'cancel-paste': handleCancelPaste,
                     'toggle-datepicker': handleToggleDatePicker, 'prev-year': handlePrevYear, 'next-year': handleNextYear,
                     'go-today': handleGoToday, 'select-month': () => handleSelectMonth(actionTarget),
                     'close-popover': hidePopover, 'open-link': () => handleOpenLink(actionTarget),
@@ -1500,7 +1560,6 @@
                     'select-template': handleApplyTemplate, 'delete-template': handleDeleteTemplate, 'close-template': handleCloseTemplatePopover,
                 };
                 if(actionMap[action]) {
-                    // リンクを開くアクションが他のクリック処理を妨げないように
                     if (action === 'open-link') e.stopPropagation();
                     actionMap[action]();
                 }
@@ -1534,14 +1593,14 @@
             const clickedLabel = target.closest('.label');
             if (wasEditing && state.activeLabelInfo.id !== Number(clickedLabel?.dataset.id)) {
                  hidePopover();
-                 return; // Popover was hidden, action for this click is complete.
+                 return;
             }
 
             if (clickedLabel) {
                 const labelId = Number(clickedLabel.dataset.id);
                 if (state.activeLabelInfo?.id === labelId) return;
                 saveOrDiscardActiveLabel();
-                const labelData = state.labels.find(l => l.id === labelId);
+                const labelData = getActiveProfile().labels.find(l => l.id === labelId);
                 state.activeLabelInfo = { type: 'existing', id: labelId, style: { ...labelData.style } };
                 render();
                 setTimeout(() => {
@@ -1550,7 +1609,7 @@
                 }, 0);
             } else if (clickedCell && !state.activeLabelInfo) {
                 const dateStr = clickedCell.dataset.date;
-                const labelsOnDate = state.labels.filter(l => l.date === dateStr).length;
+                const labelsOnDate = getActiveProfile().labels.filter(l => l.date === dateStr).length;
                 state.activeLabelInfo = {
                     type: 'new', date: dateStr, text: '', link: '',
                     top: 5 + labelsOnDate * 28, left: 5, style: { ...DEFAULT_STYLE }
@@ -1567,8 +1626,16 @@
 
         const handleGlobalInput = (e) => {
             const target = e.target;
-            if (target.id === 'calendar-id') state.currentId = target.value;
-            else if (target.id === 'year-input') {
+            if (target.id === 'profile-name') {
+                const profile = getActiveProfile();
+                if (profile) {
+                    profile.name = target.value;
+                    saveData();
+                    // Update dropdown text in real-time
+                    const option = document.querySelector(`#profile-selector option[value="${state.activeProfileId}"]`);
+                    if(option) option.textContent = target.value || '無題のスケジュール';
+                }
+            } else if (target.id === 'year-input') {
                 const year = parseInt(target.value, 10);
                 if (!isNaN(year) && String(year).length >= 4) { state.datePickerYear = year; render(); }
             } else if (target.closest('#decoration-popover')) {
@@ -1581,6 +1648,10 @@
                 if (activeEl) {
                     activeEl.style[prop] = value;
                 }
+            } else if (target.id === 'profile-selector') {
+                state.activeProfileId = target.value;
+                saveData();
+                render();
             }
         };
 
@@ -1624,7 +1695,7 @@
             }
             if (!state.dragInfo) return;
 
-            if (state.dragInfo.isLongPress) e.preventDefault(); // Prevent scroll only when dragging
+            if (state.dragInfo.isLongPress) e.preventDefault(); 
 
             const coords = getEventCoords(e);
             if (!state.dragInfo.hasMoved) {
@@ -1652,7 +1723,7 @@
 
             if (!hasMoved) {
                 state.dragInfo = null;
-                return; // Was a tap, click handler will manage.
+                return; 
             }
             
             const coords = getEventCoords(e);
@@ -1663,7 +1734,7 @@
             
             if (targetCell) {
                 const containerRect = targetCell.querySelector('.labels-container').getBoundingClientRect();
-                const label = state.labels.find(l => l.id === id);
+                const label = getActiveProfile().labels.find(l => l.id === id);
                 if (label) {
                     label.date = targetCell.dataset.date;
                     label.top = Math.max(0, coords.y - containerRect.top - offsetY);
@@ -1693,12 +1764,15 @@
             reader.onload = event => {
                 try {
                     const data = JSON.parse(event.target.result);
-                    state.labels = (data && Array.isArray(data.labels)) ? data.labels : (Array.isArray(data) ? data : []);
-                    state.templates = (data && Array.isArray(data.templates)) ? data.templates : [];
                     const fileName = file.name;
-                    state.currentId = fileName.lastIndexOf('.') > 0 ? fileName.substring(0, fileName.lastIndexOf('.')) : fileName;
-                    saveData(); render();
-                    alert('データを読み込みました。');
+                    const profileName = fileName.lastIndexOf('.') > 0 ? fileName.substring(0, fileName.lastIndexOf('.')) : fileName;
+                    const labels = (data && Array.isArray(data.labels)) ? data.labels : (Array.isArray(data) ? data : []);
+                    const templates = (data && Array.isArray(data.templates)) ? data.templates : [];
+                    
+                    createNewProfile(profileName, labels, templates);
+                    saveData(); 
+                    render();
+                    alert(`プロファイル「${profileName}」を読み込みました。`);
                 } catch (error) {
                     alert(`エラー：ファイルの読み込みに失敗しました。\n${error.message}`);
                 } finally {
@@ -1734,23 +1808,22 @@
                     throw new Error('無効なデータ形式です。labelsまたはtemplatesプロパティが見つかりません。');
                 }
 
-                state.labels = hasLabels ? data.labels : (isLegacyArray ? data : []);
-                state.templates = hasTemplates ? data.templates : [];
-                state.currentId = ''; 
-                
+                const labels = hasLabels ? data.labels : (isLegacyArray ? data : []);
+                const templates = hasTemplates ? data.templates : [];
+                const profileName = `貼付データ ${new Date().toLocaleString()}`;
+
+                createNewProfile(profileName, labels, templates);
                 saveData(); 
                 render();
-                handleCancelPaste(); // Close modal
-                alert('データを読み込みました。');
+                handleCancelPaste();
+                alert(`プロファイル「${profileName}」を読み込みました。`);
             } catch (error) {
                 alert(`エラー：データの読み込みに失敗しました。\nJSON形式が正しいか確認してください。\n${error.message}`);
-                // 読み込みに失敗してもテキストエリアは閉じないでおく
             }
         };
         
         const handlePastedData = (event) => {
             const pastedText = (event.clipboardData || window.clipboardData).getData('text');
-            // 少し待ってから実行することで、ブラウザのUI更新と競合するのを防ぐ
             setTimeout(() => {
                 loadFromPastedText(pastedText);
             }, 50);
@@ -1763,6 +1836,7 @@
             loadData();
             document.addEventListener('click', handleGlobalClick, true);
             document.addEventListener('input', handleGlobalInput);
+            document.addEventListener('change', handleGlobalInput); // For select element
             document.addEventListener('mousedown', handlePointerDown);
             document.addEventListener('touchstart', handlePointerDown, { passive: true });
             document.addEventListener('mousemove', handlePointerMove);
